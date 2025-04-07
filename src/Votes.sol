@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // OpenZeppelin Contracts (last updated v5.1.0) (governance/utils/Votes.sol)
+// Modified for pileum.org
 pragma solidity ^0.8.20;
 
 import {IERC5805} from "@openzeppelin/contracts/interfaces/IERC5805.sol";
@@ -37,9 +38,10 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
 
     mapping(address account => address) private _delegatee;
 
-    mapping(address delegatee => Checkpoints.Trace208) private _delegateCheckpoints;
+    //struct delegateEpoch: {uint48 epochStart, uint48 epochEnd, uint160 delegateAddress}
+    mapping(uint256 delegateEpoch => Checkpoints.Trace208) private _delegateCheckpoints;
 
-    Checkpoints.Trace208 private _totalCheckpoints;
+    mapping(uint32 epoch => Checkpoints.Trace208) private _totalCheckpoints;
 
     /**
      * @dev The clock was incorrectly modified.
@@ -59,6 +61,14 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
         return Time.blockNumber();
     }
 
+    function epoch(uint48 timepoint) public view virtual returns (uint32);
+
+    function currEpoch() public view virtual returns (uint32);
+
+    function epochAddress(address account, uint48 timepoint) internal view virtual returns (uint256);
+
+    function epochIndexAddress(address account, uint32 epochIndex) internal pure virtual returns (uint256);
+
     /**
      * @dev Machine-readable description of the clock as specified in ERC-6372.
      */
@@ -75,7 +85,7 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
      * @dev Returns the current amount of votes that `account` has.
      */
     function getVotes(address account) public view virtual returns (uint256) {
-        return _delegateCheckpoints[account].latest();
+        return _delegateCheckpoints[epochIndexAddress(account, currEpoch())].latest();
     }
 
     /**
@@ -91,7 +101,9 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
         if (timepoint >= currentTimepoint) {
             revert ERC5805FutureLookup(timepoint, currentTimepoint);
         }
-        return _delegateCheckpoints[account].upperLookupRecent(SafeCast.toUint48(timepoint));
+        return _delegateCheckpoints[epochAddress(account, SafeCast.toUint48(timepoint))].upperLookupRecent(
+            SafeCast.toUint48(timepoint)
+        );
     }
 
     /**
@@ -111,14 +123,14 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
         if (timepoint >= currentTimepoint) {
             revert ERC5805FutureLookup(timepoint, currentTimepoint);
         }
-        return _totalCheckpoints.upperLookupRecent(SafeCast.toUint48(timepoint));
+        return _totalCheckpoints[epoch(SafeCast.toUint48(timepoint))].upperLookupRecent(SafeCast.toUint48(timepoint));
     }
 
     /**
      * @dev Returns the current total supply of votes.
      */
     function _getTotalSupply() internal view virtual returns (uint256) {
-        return _totalCheckpoints.latest();
+        return _totalCheckpoints[currEpoch()].latest();
     }
 
     /**
@@ -163,35 +175,37 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
         _delegatee[account] = delegatee;
 
         emit DelegateChanged(account, oldDelegate, delegatee);
-        _moveDelegateVotes(oldDelegate, delegatee, _getVotingUnits(account));
+        _moveDelegateVotes(oldDelegate, delegatee, _getVotingUnits(account), currEpoch());
     }
 
     /**
      * @dev Transfers, mints, or burns voting units. To register a mint, `from` should be zero. To register a burn, `to`
      * should be zero. Total supply of voting units will be adjusted with mints and burns.
      */
-    function _transferVotingUnits(address from, address to, uint256 amount) internal virtual {
+    function _transferVotingUnits(address from, address to, uint256 amount, uint32 epochIndex) internal virtual {
         if (from == address(0)) {
-            _push(_totalCheckpoints, _add, SafeCast.toUint208(amount));
+            _push(_totalCheckpoints[epochIndex], _add, SafeCast.toUint208(amount));
         }
         if (to == address(0)) {
-            _push(_totalCheckpoints, _subtract, SafeCast.toUint208(amount));
+            _push(_totalCheckpoints[epochIndex], _subtract, SafeCast.toUint208(amount));
         }
-        _moveDelegateVotes(delegates(from), delegates(to), amount);
+        _moveDelegateVotes(delegates(from), delegates(to), amount, epochIndex);
     }
 
     /**
      * @dev Moves delegated votes from one delegate to another.
      */
-    function _moveDelegateVotes(address from, address to, uint256 amount) internal virtual {
+    function _moveDelegateVotes(address from, address to, uint256 amount, uint32 epochIndex) internal virtual {
         if (from != to && amount > 0) {
             if (from != address(0)) {
-                (uint256 oldValue, uint256 newValue) =
-                    _push(_delegateCheckpoints[from], _subtract, SafeCast.toUint208(amount));
+                (uint256 oldValue, uint256 newValue) = _push(
+                    _delegateCheckpoints[epochIndexAddress(from, epochIndex)], _subtract, SafeCast.toUint208(amount)
+                );
                 emit DelegateVotesChanged(from, oldValue, newValue);
             }
             if (to != address(0)) {
-                (uint256 oldValue, uint256 newValue) = _push(_delegateCheckpoints[to], _add, SafeCast.toUint208(amount));
+                (uint256 oldValue, uint256 newValue) =
+                    _push(_delegateCheckpoints[epochIndexAddress(to, epochIndex)], _add, SafeCast.toUint208(amount));
                 emit DelegateVotesChanged(to, oldValue, newValue);
             }
         }
@@ -201,7 +215,7 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
      * @dev Get number of checkpoints for `account`.
      */
     function _numCheckpoints(address account) internal view virtual returns (uint32) {
-        return SafeCast.toUint32(_delegateCheckpoints[account].length());
+        return SafeCast.toUint32(_delegateCheckpoints[epochIndexAddress(account, currEpoch())].length());
     }
 
     /**
@@ -213,7 +227,7 @@ abstract contract Votes is Context, EIP712, Nonces, IERC5805 {
         virtual
         returns (Checkpoints.Checkpoint208 memory)
     {
-        return _delegateCheckpoints[account].at(pos);
+        return _delegateCheckpoints[epochIndexAddress(account, currEpoch())].at(pos);
     }
 
     function _push(
