@@ -2,14 +2,14 @@
 // OpenZeppelin Contracts (last updated v5.1.0) (governance/utils/Votes.sol)
 pragma solidity ^0.8.20;
 
-import {IERC5805} from "../../interfaces/IERC5805.sol";
-import {Context} from "../../utils/Context.sol";
-import {Nonces} from "../../utils/Nonces.sol";
-import {EIP712} from "../../utils/cryptography/EIP712.sol";
-import {Checkpoints} from "../../utils/structs/Checkpoints.sol";
-import {SafeCast} from "../../utils/math/SafeCast.sol";
-import {ECDSA} from "../../utils/cryptography/ECDSA.sol";
-import {Time} from "../../utils/types/Time.sol";
+import {IERC5805} from "@openzeppelin/contracts/interfaces/IERC5805.sol";
+import {Context} from "@openzeppelin/contracts/utils/Context.sol";
+import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Time} from "@openzeppelin/contracts/utils/types/Time.sol";
 
 /**
  * @dev This is a base abstract contract that tracks voting units, which are a measure of voting power that can be
