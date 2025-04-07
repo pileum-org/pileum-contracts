@@ -1,1 +1,2 @@
 @openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+@openzeppelin/community-contracts/=lib/openzeppelin-community-contracts/contracts/
