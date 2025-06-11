@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IPileus} from "./interfaces/IPileus.sol";
 import {IOCO} from "./interfaces/IOCO.sol";
 
@@ -13,7 +14,7 @@ import {IOCO} from "./interfaces/IOCO.sol";
 /// @dev OCO tokens can be minted only by this contract. It supports claiming, buying,
 /// settling, and withdrawing based on per-epoch rules.
 /// @custom:security-contact security@pileum.org
-contract TOTC is Ownable {
+contract TOTC is Ownable, ReentrancyGuard {
     // =============================================================
     //                           EVENTS
     // =============================================================
@@ -159,7 +160,7 @@ contract TOTC is Ownable {
     /// @return amount The amount of OCO tokens minted as a result of the claim.
     /// @dev Caller must be the token owner or approved. If the token was minted in the current epoch,
     /// any pending withdrawal is processed before claiming.
-    function claim(uint256 tokenId, address to, uint48 duration) public returns (uint128 amount) {
+    function claim(uint256 tokenId, address to, uint48 duration) public nonReentrant returns (uint128 amount) {
         require(duration > 0, "Null claimed duration");
         (address owner, uint48 mintBlock) = pileus.propsOf(tokenId);
         require(
@@ -195,13 +196,13 @@ contract TOTC is Ownable {
     /// @return remainder The remainder of ETH returned to the buyer if not fully utilized.
     /// @dev When buying in the current epoch, the settlement is triggered and the duration is adjusted.
     /// The ETH value is divided equally over the remaining blocks.
-    function buy(uint32 epoch) public payable returns (uint128) {
+    function buy(uint32 epoch) public payable nonReentrant returns (uint128) {
         uint48 duration = _epochDuration;
         uint128 value = SafeCast.toUint128(msg.value);
         require(value > 0, "Value must be higher than zero");
         require(epoch >= currEpoch(), "Cannot buy past epoch");
         if (epoch == currEpoch()) {
-            settle(epoch);
+            _settle(epoch);
             duration -= blockIndex();
         }
         require(getAllowanceAtEpoch(epoch, duration) > 0, "Nothing to buy");
@@ -214,7 +215,8 @@ contract TOTC is Ownable {
         _totals[epoch].valueInvested += (value - remainder);
 
         if (remainder > 0) {
-            payable(msg.sender).transfer(remainder);
+            (bool sent,) = payable(msg.sender).call{value: remainder}("");
+            require(sent, "Return of remainder failed");
         }
 
         emit Buy(msg.sender, epoch, valuePerBlock, remainder);
@@ -228,8 +230,12 @@ contract TOTC is Ownable {
     /// @param epoch The epoch to settle.
     /// @return amount The amount of OCO tokens minted as a result of settling.
     /// @dev Can only settle for the current or past epochs.
-    function settle(uint32 epoch) public returns (uint128 amount) {
+    function settle(uint32 epoch) public nonReentrant returns (uint128 amount) {
         require(epoch <= currEpoch(), "Cannot settle future epoch");
+        return _settle(epoch);
+    }
+
+    function _settle(uint32 epoch) internal returns (uint128 amount) {
         AccountInfo storage acc = _balances[balancesKey(epoch, msg.sender)];
         uint48 settleIndex = epoch == currEpoch() ? blockIndex() : _epochDuration;
         if (acc.lastSettle < settleIndex) {
@@ -255,7 +261,7 @@ contract TOTC is Ownable {
     /// @param tokenId The Pileus token id.
     /// @return value The amount of ETH withdrawn (in wei).
     /// @dev Caller must be the token owner or approved. Withdrawal can only occur for current or past epochs.
-    function withdraw(uint256 tokenId) public returns (uint128 value) {
+    function withdraw(uint256 tokenId) public nonReentrant returns (uint128 value) {
         (address owner, uint48 mintBlock) = pileus.propsOf(tokenId);
         require(
             msg.sender == owner || pileus.getApproved(tokenId) == msg.sender
@@ -284,7 +290,8 @@ contract TOTC is Ownable {
             t.supplyWithdrawn += amount;
             _allowances[tokenId] = withdrawIndex;
             if (value > 0) {
-                payable(msg.sender).transfer(value);
+                (bool sent,) = payable(msg.sender).call{value: value}("");
+                require(sent, "Withdrawal transfer failed");
             }
             emit Withdraw(msg.sender, amount, valueQ128);
             if (mintEpoch == currEpoch()) {
